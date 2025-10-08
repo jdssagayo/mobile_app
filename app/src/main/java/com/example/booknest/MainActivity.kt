@@ -1,8 +1,11 @@
 package com.example.booknest
 
+import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,17 +26,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.booknest.data.Book
 import com.example.booknest.ui.theme.BookNestTheme
-import java.util.UUID
-
-// --- Data Classes ---
+import com.example.booknest.viewModel.BookViewModel
+import com.example.booknest.viewModel.BookViewModelFactory
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.ktx.auth
+import com.google.firebase.ktx.Firebase
+import kotlinx.coroutines.flow.StateFlow
 
 enum class AppScreen(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Filled.Home),
@@ -45,36 +52,35 @@ enum class AppScreen(val label: String, val icon: ImageVector) {
     BookDetail("Details", Icons.Filled.Info),
     Settings("Settings", Icons.Filled.Settings),
     AddNote("Add Note", Icons.Filled.Edit),
-    AddReminder("Set Reminder", Icons.Filled.Edit)
+    AddReminder("Set Reminder", Icons.Filled.Edit),
+    Login("Login", Icons.Filled.Lock)
 }
 
-data class Book(val id: String, val title: String, val author: String, val coverUrl: String, val genre: String, var isDownloaded: Boolean = false)
-
-// --- Main Activity ---
 class MainActivity : ComponentActivity() {
+
+    private val bookViewModel: BookViewModel by viewModels {
+        val app = application as BookNestApp
+        BookViewModelFactory(app.repository, app.auth)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            BookNestApp()
+            BookNestApp(bookViewModel)
         }
     }
 }
 
-// --- Main App Composable ---
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BookNestApp() {
-    val currentUserId = remember { UUID.randomUUID().toString() }
-    var currentScreen by remember { mutableStateOf(AppScreen.Home) }
+fun BookNestApp(viewModel: BookViewModel) {
+    var currentScreen by remember { mutableStateOf(AppScreen.Login) }
     var detailBookId by remember { mutableStateOf<String?>(null) }
     var darkTheme by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
-    val mockBooks = remember { mutableStateListOf(
-        Book("1", "The Path to Quality Education", "A. Smith", "https://placehold.co/100x150/ff7f7f/ffffff?text=SDG+4", "Non-fiction"),
-        Book("2", "Echoes of the Future", "B. Jones", "https://placehold.co/100x150/7f7fff/ffffff?text=Fiction", "Fantasy"),
-        Book("3", "Writing Fundamentals", "C. Lee", "https://placehold.co/100x150/7fff7f/ffffff?text=Writing", "Education"),
-        Book("4", "The Silent Reader", "D. Wu", "https://placehold.co/100x150/ffff7f/000000?text=Novel", "Mystery"),
-    )}
+    val allBooks by viewModel.allBooks.collectAsState()
+    val favoriteBooks by viewModel.favoriteBooks.collectAsState()
+    val draftBooks by viewModel.draftBooks.collectAsState()
 
     val navItems = listOf(AppScreen.Home, AppScreen.Saved, AppScreen.Drafts, AppScreen.Profile)
 
@@ -86,41 +92,64 @@ fun BookNestApp() {
         currentScreen = screen
     }
 
-    fun onDownloadBook(bookId: String) {
-        val book = mockBooks.find { it.id == bookId }?.let { 
-            it.isDownloaded = !it.isDownloaded
-        }
-    }
-
     BookNestTheme(darkTheme = darkTheme) {
-        Scaffold(
-            topBar = { BookNestTopBar(currentScreen = currentScreen, onNavigate = navigate) },
-            bottomBar = { BookNestBottomBar(currentScreen = currentScreen, navItems = navItems, onNavigate = navigate) },
-            floatingActionButton = {
-                if (currentScreen == AppScreen.Home || currentScreen == AppScreen.Saved || currentScreen == AppScreen.Drafts) {
-                    FloatingActionButton(
-                        onClick = { navigate(AppScreen.WritingOptions, null) },
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Start Writing")
+        if (Firebase.auth.currentUser == null) {
+            LoginScreen(onLoginSuccess = { currentScreen = AppScreen.Home })
+        } else {
+            Scaffold(
+                topBar = { BookNestTopBar(currentScreen = currentScreen, onNavigate = navigate) },
+                bottomBar = { BookNestBottomBar(currentScreen = currentScreen, navItems = navItems, onNavigate = navigate) },
+                floatingActionButton = {
+                    if (currentScreen == AppScreen.Drafts) {
+                        FloatingActionButton(
+                            onClick = {
+                                val intent = Intent(context, WriteBookActivity::class.java)
+                                context.startActivity(intent)
+                            },
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ) {
+                            Icon(Icons.Filled.Add, contentDescription = "Start Writing")
+                        }
                     }
-                }
-            },
-            floatingActionButtonPosition = FabPosition.Center
-        ) { paddingValues ->
-            Box(modifier = Modifier.padding(paddingValues)) {
-                when (currentScreen) {
-                    AppScreen.Home -> HomeScreen(onNavigate = navigate, mockBooks = mockBooks)
-                    AppScreen.Saved -> SavedScreen(onNavigate = navigate, mockBooks = mockBooks)
-                    AppScreen.Drafts -> DraftsScreen(onNavigate = navigate)
-                    AppScreen.Profile -> ProfileScreen(onNavigate = navigate, userId = currentUserId, darkTheme = darkTheme, onThemeChange = { darkTheme = it })
-                    AppScreen.Search -> SearchScreen(onNavigate = navigate)
-                    AppScreen.WritingOptions -> WritingOptionsScreen(onNavigate = navigate)
-                    AppScreen.Settings -> SettingsScreen(onNavigate = navigate, darkTheme = darkTheme, onThemeChange = { darkTheme = it })
-                    AppScreen.AddNote -> AddNoteScreen(onNavigate = navigate, bookId = detailBookId)
-                    AppScreen.AddReminder -> AddReminderScreen(onNavigate = navigate, bookId = detailBookId)
-                    AppScreen.BookDetail -> BookDetailScreen(onNavigate = navigate, bookId = detailBookId, mockBooks = mockBooks, onDownloadBook = ::onDownloadBook)
+                },
+                floatingActionButtonPosition = FabPosition.Center
+            ) { paddingValues ->
+                Box(modifier = Modifier.padding(paddingValues)) {
+                    when (currentScreen) {
+                        AppScreen.Home -> HomeScreen(onNavigate = navigate, books = allBooks)
+                        AppScreen.Saved -> SavedScreen(onNavigate = navigate, books = favoriteBooks)
+                        AppScreen.Drafts -> DraftsScreen(onNavigate = navigate, books = draftBooks, onEdit = {
+                            val intent = Intent(context, WriteBookActivity::class.java)
+                            intent.putExtra("BOOK_ID", it)
+                            context.startActivity(intent)
+                        }, onDelete = { viewModel.deleteBook(it) })
+                        AppScreen.Profile -> ProfileScreen(
+                            onNavigate = navigate,
+                            userId = Firebase.auth.currentUser?.uid ?: "",
+                            darkTheme = darkTheme,
+                            onThemeChange = { darkTheme = it },
+                            onLogout = { currentScreen = AppScreen.Login }
+                        )
+                        AppScreen.Search -> SearchScreen(onNavigate = navigate)
+                        AppScreen.BookDetail -> BookDetailScreen(
+                            onNavigate = navigate,
+                            bookId = detailBookId,
+                            getBookById = { viewModel.getBookById(it) },
+                            onToggleFavorite = { bookId, isFavorite -> viewModel.toggleFavorite(bookId, isFavorite) },
+                            onDownload = {
+                                Toast.makeText(context, "Book downloaded for offline use", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                        AppScreen.WritingOptions -> {
+                            val intent = Intent(context, WriteBookActivity::class.java)
+                            context.startActivity(intent)
+                        }
+                        AppScreen.Settings -> SettingsScreen(onNavigate = navigate)
+                        AppScreen.AddNote -> AddNoteScreen(onNavigate = navigate, bookId = detailBookId)
+                        AppScreen.AddReminder -> AddReminderScreen(onNavigate = navigate, bookId = detailBookId)
+                        AppScreen.Login -> LoginScreen(onLoginSuccess = { currentScreen = AppScreen.Home })
+                    }
                 }
             }
         }
@@ -233,7 +262,7 @@ fun BookItem(book: Book, onClick: () -> Unit) {
 }
 
 @Composable
-fun HomeScreen(onNavigate: (AppScreen, String?) -> Unit, mockBooks: List<Book>) {
+fun HomeScreen(onNavigate: (AppScreen, String?) -> Unit, books: List<Book>) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
@@ -245,26 +274,8 @@ fun HomeScreen(onNavigate: (AppScreen, String?) -> Unit, mockBooks: List<Book>) 
             Spacer(Modifier.height(8.dp))
         }
 
-        if (mockBooks.isNotEmpty()) {
-            items(mockBooks.chunked(2)) { rowBooks ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceAround
-                ) {
-                    rowBooks.forEach { book ->
-                        BookItem(book) { onNavigate(AppScreen.BookDetail, book.id) }
-                    }
-                    if (rowBooks.size == 1) Spacer(Modifier.weight(1f))
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-
-            item {
-                Spacer(Modifier.height(24.dp))
-                Text("Stories of Quality Education", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-            }
-            items(mockBooks.takeLast(2).chunked(2)) { rowBooks ->
+        if (books.isNotEmpty()) {
+            items(books.chunked(2)) { rowBooks ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceAround
@@ -289,10 +300,12 @@ fun HomeScreen(onNavigate: (AppScreen, String?) -> Unit, mockBooks: List<Book>) 
 }
 
 @Composable
-fun SavedScreen(onNavigate: (AppScreen, String?) -> Unit, mockBooks: List<Book>) {
-    Column(modifier = Modifier
-        .fillMaxSize()
-        .padding(top = 16.dp)) {
+fun SavedScreen(onNavigate: (AppScreen, String?) -> Unit, books: List<Book>) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 16.dp)
+    ) {
         Text(
             "Your Saved Reading List",
             style = MaterialTheme.typography.headlineMedium,
@@ -300,22 +313,18 @@ fun SavedScreen(onNavigate: (AppScreen, String?) -> Unit, mockBooks: List<Book>)
         )
         Spacer(Modifier.height(8.dp))
 
-        if (mockBooks.isNotEmpty()) {
+        if (books.isNotEmpty()) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(mockBooks) { book ->
+                items(books) { book ->
                     ListItem(
                         headlineContent = { Text(book.title) },
                         supportingContent = { Text("by ${book.author} | ${book.genre}") },
                         leadingContent = {
-                            if (book.isDownloaded) {
-                                Icon(Icons.Filled.DownloadDone, contentDescription = "Downloaded")
-                            } else {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.List,
-                                    contentDescription = "Book Icon",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.List,
+                                contentDescription = "Book Icon",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                         },
                         modifier = Modifier
                             .clickable { onNavigate(AppScreen.BookDetail, book.id) }
@@ -333,50 +342,52 @@ fun SavedScreen(onNavigate: (AppScreen, String?) -> Unit, mockBooks: List<Book>)
 }
 
 @Composable
-fun DraftsScreen(onNavigate: (AppScreen, String?) -> Unit) {
-    Column(modifier = Modifier
-        .fillMaxSize()
-        .padding(top = 16.dp)) {
+fun DraftsScreen(onNavigate: (AppScreen, String?) -> Unit, books: List<Book>, onEdit: (String) -> Unit, onDelete: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 16.dp)
+    ) {
         Text(
             "My Drafts",
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(horizontal = 16.dp)
         )
         Spacer(Modifier.height(8.dp))
-        Text(
-            "Drafts A",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 16.dp)
-        )
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
-        val drafts = listOf("A Personal Essay on SDG 4", "The Lost City Chapter 1", "Poem: The Learning Tree")
-
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(drafts) { draftTitle ->
-                ListItem(
-                    headlineContent = { Text(draftTitle) },
-                    leadingContent = { Icon(Icons.Filled.Edit, contentDescription = "Draft") },
-                    trailingContent = {
-                        IconButton(onClick = { /* TODO: Handle more options for this draft */ }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "More options")
-                        }
-                    },
-                    modifier = Modifier
-                        .clickable {
-                            onNavigate(AppScreen.WritingOptions, draftTitle) // Using draftTitle as a placeholder ID
-                        }
-                        .padding(horizontal = 16.dp)
-                )
-                HorizontalDivider()
+        if (books.isNotEmpty()) {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(books) { book ->
+                    ListItem(
+                        headlineContent = { Text(book.title) },
+                        leadingContent = { Icon(Icons.Filled.Edit, contentDescription = "Draft") },
+                        trailingContent = {
+                            Row {
+                                IconButton(onClick = { onEdit(book.id) }) {
+                                    Icon(Icons.Filled.Edit, contentDescription = "Edit")
+                                }
+                                IconButton(onClick = { onDelete(book.id) }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .clickable { onEdit(book.id) }
+                            .padding(horizontal = 16.dp)
+                    )
+                    HorizontalDivider()
+                }
+            }
+        } else {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No drafts found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 }
 
 @Composable
-fun ProfileScreen(onNavigate: (AppScreen, String?) -> Unit, userId: String, darkTheme: Boolean, onThemeChange: (Boolean) -> Unit) {
+fun ProfileScreen(onNavigate: (AppScreen, String?) -> Unit, userId: String, darkTheme: Boolean, onThemeChange: (Boolean) -> Unit, onLogout: () -> Unit) {
     Column(modifier = Modifier
         .fillMaxSize()
         .padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -427,82 +438,24 @@ fun ProfileScreen(onNavigate: (AppScreen, String?) -> Unit, userId: String, dark
         }
         Spacer(Modifier.height(16.dp))
 
-        val menuItems = listOf(
-            "Feedback" to Icons.AutoMirrored.Filled.Send,
-            "About us" to Icons.Filled.Info,
-            "Disclaimer" to Icons.Filled.Info
-        )
-        menuItems.forEach { (label, icon) ->
-            ListItem(
-                headlineContent = { Text(label) },
-                leadingContent = { Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary) },
-                trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Go") },
-                modifier = Modifier.clickable { /* Navigate to specific screen */ }
-            )
-            HorizontalDivider()
+        Button(onClick = { Firebase.auth.signOut(); onLogout() }) {
+            Text("Logout")
         }
     }
 }
 
 @Composable
-fun WritingOptionsScreen(onNavigate: (AppScreen, String?) -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Start a New Creation", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.height(32.dp))
-        Button(
-            onClick = { onNavigate(AppScreen.Drafts, null) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-        ) {
-            Text("Write an article/essay", fontSize = 18.sp)
-        }
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = { onNavigate(AppScreen.Drafts, null) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-        ) {
-            Text("Write fiction", fontSize = 18.sp)
-        }
-    }
-}
+fun BookDetailScreen(
+    onNavigate: (AppScreen, String?) -> Unit,
+    bookId: String?,
+    getBookById: (String) -> StateFlow<Book?>,
+    onToggleFavorite: (String, Boolean) -> Unit,
+    onDownload: (Book) -> Unit
+) {
+    val bookState by if (bookId != null) getBookById(bookId).collectAsState() else remember { mutableStateOf(null) }
+    val book = bookState
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SearchScreen(onNavigate: (AppScreen, String?) -> Unit) {
-    Column(modifier = Modifier
-        .fillMaxSize()
-        .padding(16.dp)) {
-        var searchQuery by remember { mutableStateOf("") }
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            label = { Text("Search for books, authors, or topics...") },
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "Search Icon") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(16.dp))
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            Text("Search Results will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = { onNavigate(AppScreen.Home, null) }) { Text("Go Home") }
-    }
-}
-
-@Composable
-fun BookDetailScreen(onNavigate: (AppScreen, String?) -> Unit, bookId: String?, mockBooks: List<Book>, onDownloadBook: (String) -> Unit) {
-    val currentBook = mockBooks.find { it.id == bookId }
-
-    if (currentBook == null) {
+    if (book == null) {
         Column(
             modifier = Modifier.fillMaxSize().padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -525,13 +478,13 @@ fun BookDetailScreen(onNavigate: (AppScreen, String?) -> Unit, bookId: String?, 
         .verticalScroll(rememberScrollState())) {
         Text("Book Detail", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
-        Text("Title: ${currentBook.title}", style = MaterialTheme.typography.titleLarge)
-        Text("Author: ${currentBook.author}", style = MaterialTheme.typography.titleMedium)
-        Text("Genre: ${currentBook.genre}", style = MaterialTheme.typography.bodyMedium)
+        Text("Title: ${book.title}", style = MaterialTheme.typography.titleLarge)
+        Text("Author: ${book.author}", style = MaterialTheme.typography.titleMedium)
+        Text("Genre: ${book.genre}", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(16.dp))
         Image(
             imageVector = Icons.Filled.Info,
-            contentDescription = "Cover of ${currentBook.title}",
+            contentDescription = "Cover of ${book.title}",
             modifier = Modifier
                 .height(200.dp)
                 .fillMaxWidth()
@@ -539,26 +492,77 @@ fun BookDetailScreen(onNavigate: (AppScreen, String?) -> Unit, bookId: String?, 
             contentScale = ContentScale.Fit
         )
         Spacer(Modifier.height(16.dp))
-        Text("This is the screen where the user can read, add notes, and set reminders, as per your wireframe. (Content for ${currentBook.title})")
+        Text(book.content)
         Spacer(Modifier.height(24.dp))
 
-        Button(onClick = { onDownloadBook(currentBook.id) }) {
-            Icon(if (currentBook.isDownloaded) Icons.Filled.DownloadDone else Icons.Filled.Download, contentDescription = "Download")
+        Button(onClick = { onToggleFavorite(book.id, !book.isFavorite) }) {
+            Icon(if (book.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = "Favorite")
             Spacer(Modifier.width(8.dp))
-            Text(if (currentBook.isDownloaded) "Downloaded" else "Download")
+            Text(if (book.isFavorite) "Favorited" else "Favorite")
         }
+
         Spacer(Modifier.height(8.dp))
 
-        Button(onClick = { onNavigate(AppScreen.AddNote, currentBook.id) }) {
-            Icon(Icons.Filled.Edit, contentDescription = "Add Note")
+        Button(onClick = { onDownload(book) }) {
+            Icon(Icons.Filled.Download, contentDescription = "Download")
             Spacer(Modifier.width(8.dp))
-            Text("Add Note")
+            Text("Download")
         }
+    }
+}
+
+@Composable
+fun SearchScreen(onNavigate: (AppScreen, String?) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        var searchQuery by remember { mutableStateOf("") }
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            label = { Text("Search for books, authors, or topics...") },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "Search Icon") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(16.dp))
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            Text("Search Results will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = { onNavigate(AppScreen.Home, null) }) { Text("Go Home") }
+    }
+}
+
+@Composable
+fun SettingsScreen(onNavigate: (AppScreen, String?) -> Unit) {
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .padding(16.dp)) {
+        Text("Settings", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
-        Button(onClick = { onNavigate(AppScreen.AddReminder, currentBook.id) }) {
-            Icon(Icons.Filled.Edit, contentDescription = "Set Reminder")
-            Spacer(Modifier.width(8.dp))
-            Text("Add Reading Reminder")
+        Text("Account, notifications, data, and general preferences.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(24.dp))
+
+        ListItem(
+            headlineContent = { Text("Notification Preferences") },
+            leadingContent = { Icon(Icons.Filled.Notifications, "Notifications")},
+            modifier = Modifier.clickable { /* TODO */ }
+        )
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("Data Usage") },
+            leadingContent = { Icon(Icons.Filled.Info, "Data Usage")},
+            modifier = Modifier.clickable { /* TODO */ }
+        )
+        HorizontalDivider()
+        Spacer(Modifier.weight(1f))
+        Button(
+            onClick = { onNavigate(AppScreen.Profile, null) },
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+        ) {
+            Text("Sign Out", color = MaterialTheme.colorScheme.onErrorContainer)
         }
     }
 }
@@ -598,50 +602,61 @@ fun AddReminderScreen(onNavigate: (AppScreen, String?) -> Unit, bookId: String?)
         Spacer(Modifier.height(8.dp))
         Text("Reminder Time: (Tap to select time)", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
-        Button(onClick = { onNavigate(AppScreen.BookDetail, bookId) }) {
+        Button(onClick = { /* TODO: Implement date/time picker logic */ onNavigate(AppScreen.BookDetail, bookId) }) {
             Text("Set Reminder")
         }
     }
 }
 
 @Composable
-fun SettingsScreen(onNavigate: (AppScreen, String?) -> Unit, darkTheme: Boolean, onThemeChange: (Boolean) -> Unit) {
-    Column(modifier = Modifier
-        .fillMaxSize()
-        .padding(16.dp)) {
-        Text("Settings", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(8.dp))
-        Text("Account, notifications, data, and general preferences.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(24.dp))
+fun LoginScreen(onLoginSuccess: () -> Unit) {
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    val context = LocalContext.current
 
-        ListItem(
-            headlineContent = { Text("Notification Preferences") },
-            leadingContent = { Icon(Icons.Filled.Notifications, "Notifications")},
-            modifier = Modifier.clickable { /* TODO */ }
-        )
-        HorizontalDivider()
-        ListItem(
-            headlineContent = { Text("Data Usage") },
-            leadingContent = { Icon(Icons.Filled.Info, "Data Usage")},
-            modifier = Modifier.clickable { /* TODO */ }
-        )
-        HorizontalDivider()
-        Spacer(Modifier.weight(1f))
-        Button(
-            onClick = { onNavigate(AppScreen.Profile, null) },
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-        ) {
-            Text("Sign Out", color = MaterialTheme.colorScheme.onErrorContainer)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("Welcome to BookNest", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") })
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("Password") })
+        Spacer(Modifier.height(16.dp))
+        Row {
+            Button(onClick = {
+                Firebase.auth.signInWithEmailAndPassword(email, password)
+                    .addOnCompleteListener { task ->
+                        if (task.isSuccessful) {
+                            onLoginSuccess()
+                        } else {
+                            Toast.makeText(context, "Login failed: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+            }) { Text("Login") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = {
+                Firebase.auth.createUserWithEmailAndPassword(email, password)
+                    .addOnCompleteListener { task ->
+                        if (task.isSuccessful) {
+                            onLoginSuccess()
+                        } else {
+                            Toast.makeText(context, "Registration failed: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+            }) { Text("Register") }
         }
     }
 }
 
-
 @Preview(showBackground = true)
 @Composable
 fun DefaultPreview() {
-    BookNestTheme {
-        BookNestApp()
-    }
+    val app = LocalContext.current.applicationContext as BookNestApp
+    val viewModel = BookViewModel(app.repository, app.auth)
+    BookNestApp(viewModel)
 }
-

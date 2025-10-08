@@ -21,6 +21,9 @@
           </targets>
         </DialogSelection>
       </SelectionState>
+      <SelectionState runConfigName="BookNest">
+        <option name="selectionMode" value="DROPDOWN" />
+      </SelectionState>
     </selectionStates>
   </component>
 </project>
