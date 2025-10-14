@@ -21,10 +21,25 @@ class BookViewModel(private val repository: FirebaseBookRepository, private val 
     private val _draftBooks = MutableStateFlow<List<Book>>(emptyList())
     val draftBooks: StateFlow<List<Book>> = _draftBooks.asStateFlow()
 
+    private val _currentBook = MutableStateFlow<Book?>(null)
+    val currentBook: StateFlow<Book?> = _currentBook.asStateFlow()
+
     private val currentUserId: String?
         get() = auth.currentUser?.uid
 
     init {
+        // Fetch initial data only if a user is already logged in (e.g., app restart).
+        if (currentUserId != null) {
+            initializeDataForCurrentUser()
+        }
+    }
+
+    // This is the new public function to call after login.
+    fun onUserLoggedIn() {
+        initializeDataForCurrentUser()
+    }
+
+    private fun initializeDataForCurrentUser() {
         fetchAllBooks()
         fetchFavoriteBooks()
         fetchDraftBooks()
@@ -58,31 +73,45 @@ class BookViewModel(private val repository: FirebaseBookRepository, private val 
         }
     }
 
-    fun getBookById(bookId: String): StateFlow<Book?> {
-        val flow = MutableStateFlow<Book?>(null)
+    fun loadBook(bookId: String) {
         viewModelScope.launch {
-            flow.value = repository.getBookById(bookId)
+            _currentBook.value = repository.getBookById(bookId)
         }
-        return flow
     }
 
-    fun saveBook(book: Book) {
+    suspend fun saveBook(book: Book): String? {
+        val userId = currentUserId ?: return null // Don't save if user is not logged in
+        val result = repository.saveBook(book.copy(userId = userId))
+        
+        // After saving a book, ALWAYS refresh the drafts list.
+        fetchDraftBooks()
+        
+        return result
+    }
+
+    fun publishBook(book: Book) {
         viewModelScope.launch {
-            currentUserId?.let {
-                repository.saveBook(book.copy(userId = it))
-            }
+            val userId = currentUserId ?: return@launch
+            repository.publishBook(userId, book)
+            fetchAllBooks()
+            fetchDraftBooks()
         }
     }
 
     fun deleteBook(bookId: String) {
         viewModelScope.launch {
             repository.deleteBook(bookId)
+            fetchAllBooks()
+            fetchDraftBooks()
+            fetchFavoriteBooks()
         }
     }
 
     fun toggleFavorite(bookId: String, isFavorite: Boolean) {
         viewModelScope.launch {
             repository.toggleFavorite(bookId, isFavorite)
+            fetchAllBooks()
+            fetchFavoriteBooks()
         }
     }
 }

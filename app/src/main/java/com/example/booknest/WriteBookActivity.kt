@@ -1,167 +1,173 @@
+
 package com.example.booknest
 
-import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.NoteAdd
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.example.booknest.data.Book
+import androidx.lifecycle.ViewModelProvider
+import com.example.booknest.data.FirebaseBookRepository
 import com.example.booknest.ui.theme.BookNestTheme
-import com.example.booknest.viewModel.BookViewModel
-import com.example.booknest.viewModel.BookViewModelFactory
+import com.example.booknest.viewModel.WriteBookViewModel
+import com.example.booknest.viewModel.WriteBookViewModelFactory
+import com.google.firebase.auth.ktx.auth
+import com.google.firebase.ktx.Firebase
+import kotlinx.coroutines.launch
 
 class WriteBookActivity : ComponentActivity() {
-
-    private val bookViewModel: BookViewModel by viewModels {
-        val app = application as BookNestApp
-        BookViewModelFactory(app.repository, app.auth)
-    }
+    private lateinit var viewModel: WriteBookViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val bookId = intent.getStringExtra("BOOK_ID")
+        val factory = WriteBookViewModelFactory(FirebaseBookRepository(), Firebase.auth)
+        viewModel = ViewModelProvider(this, factory).get(WriteBookViewModel::class.java)
+
+        // Load the draft immediately.
+        viewModel.loadDraft(bookId)
 
         setContent {
             BookNestTheme {
-                WriteBookScreen(
-                    bookId = bookId,
-                    viewModel = bookViewModel,
-                    onSave = { finish() },
-                    onCancel = { finish() }
+                WriteScreen(
+                    viewModel = viewModel,
+                    onBack = { finish() }
                 )
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WriteBookScreen(
-    bookId: String?,
-    viewModel: BookViewModel,
-    onSave: () -> Unit,
-    onCancel: () -> Unit
-) {
-    var title by remember { mutableStateOf("") }
-    var content by remember { mutableStateOf("") }
+fun WriteScreen(viewModel: WriteBookViewModel, onBack: () -> Unit) {
+    val book by viewModel.book.collectAsState()
+    val chapters by viewModel.chapters.collectAsState()
+    val selectedChapter by viewModel.selectedChapter.collectAsState()
+    val wordCountError by viewModel.wordCountError.collectAsState()
+
+    val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    LaunchedEffect(bookId) {
-        if (bookId != null) {
-            viewModel.getBookById(bookId).collect { book ->
-                if (book != null) {
-                    title = book.title
-                    content = book.content
-                }
+    // Local states for the text fields
+    var bookTitle by remember { mutableStateOf("") }
+    var chapterContent by remember { mutableStateOf("") }
+
+    // When the book or selected chapter from the ViewModel changes, update the local states.
+    LaunchedEffect(book) {
+        book?.let {
+            if (bookTitle != it.title) {
+                bookTitle = it.title
             }
+        }
+    }
+    LaunchedEffect(selectedChapter) {
+        selectedChapter?.let {
+            if (chapterContent != it.content) {
+                chapterContent = it.content
+            }
+        }
+    }
+
+    // Show a toast when the word count error is triggered
+    LaunchedEffect(wordCountError) {
+        if (wordCountError) {
+            Toast.makeText(context, "Chapter cannot exceed 300 words.", Toast.LENGTH_LONG).show()
+            viewModel.clearWordCountError() // Reset the error after showing it
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { },
+                title = { Text("Write") },
                 navigationIcon = {
-                    IconButton(onClick = onCancel) {
+                    IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
-                    Button(
-                        onClick = {
-                            val book = Book(
-                                id = bookId ?: "",
-                                title = title.ifBlank { "Untitled" },
-                                author = "", // No longer in UI
-                                genre = "", // No longer in UI
-                                content = content,
-                                isDraft = true // Always a draft from this screen
-                            )
-                            viewModel.saveBook(book)
-                            onSave()
-                        },
-                        shape = MaterialTheme.shapes.small
-                    ) {
-                        Text("Save")
+                    IconButton(onClick = {
+                        coroutineScope.launch {
+                            val savedBookId = viewModel.save(bookTitle, chapterContent)
+                            if (savedBookId != null) {
+                                Toast.makeText(context, "Draft saved!", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }) {
+                        Icon(Icons.Default.Check, contentDescription = "Save Draft")
+                    }
+                    IconButton(onClick = {
+                        viewModel.publish()
+                        Toast.makeText(context, "Book published!", Toast.LENGTH_SHORT).show()
+                        onBack()
+                    }) {
+                        Text("Publish")
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { viewModel.addNewChapter() }) {
+                Icon(Icons.Default.Add, contentDescription = "Add Chapter")
+            }
         }
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 16.dp)
-        ) {
-            HorizontalDivider()
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = { context.startActivity(Intent(context, ReminderActivity::class.java)) }) {
-                    Icon(Icons.Default.Star, contentDescription = "Add Reminder", modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Add Reminder")
-                }
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = { context.startActivity(Intent(context, NoteActivity::class.java)) }) {
-                    Icon(Icons.Default.NoteAdd, contentDescription = "Add Note", modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Add Note")
-                }
-            }
-            HorizontalDivider()
-
-            // Title Field
-            BasicTextField(
-                value = title,
-                onValueChange = { title = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp),
-                textStyle = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface),
-                decorationBox = {
-                    if (title.isEmpty()) {
-                        Text("Add Title", style = TextStyle(fontSize = 24.sp, color = Color.Gray))
-                    }
-                    it()
-                }
+        Column(modifier = Modifier.padding(paddingValues).padding(16.dp)) {
+            // Book Title TextField
+            OutlinedTextField(
+                value = bookTitle,
+                onValueChange = { bookTitle = it },
+                label = { Text("Book Title") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
             )
 
-            // Content Field
-            BasicTextField(
-                value = content,
-                onValueChange = { content = it },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = 16.dp),
-                textStyle = TextStyle(fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface),
-                decorationBox = {
-                    if (content.isEmpty()) {
-                        Text("Start Writing...", style = TextStyle(fontSize = 16.sp, color = Color.Gray))
-                    }
-                    it()
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Chapter Dropdown
+            var chapterMenuExpanded by remember { mutableStateOf(false) }
+            Box {
+                OutlinedButton(onClick = { chapterMenuExpanded = true }) {
+                    Text(selectedChapter?.title ?: "Select Chapter")
+                    Icon(Icons.Default.MoreVert, contentDescription = "Chapter Menu")
                 }
+                DropdownMenu(
+                    expanded = chapterMenuExpanded,
+                    onDismissRequest = { chapterMenuExpanded = false }
+                ) {
+                    chapters.forEach { chapter ->
+                        DropdownMenuItem(
+                            text = { Text(chapter.title) },
+                            onClick = {
+                                viewModel.selectChapter(chapter.id)
+                                chapterMenuExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Chapter Content TextField
+            OutlinedTextField(
+                value = chapterContent,
+                onValueChange = { chapterContent = it },
+                label = { Text("Start writing your chapter...") },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                isError = wordCountError
             )
         }
     }

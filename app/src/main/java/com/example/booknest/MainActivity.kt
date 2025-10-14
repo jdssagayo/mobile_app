@@ -9,17 +9,27 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,30 +40,23 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.compose.*
 import com.example.booknest.data.Book
 import com.example.booknest.ui.theme.BookNestTheme
 import com.example.booknest.viewModel.BookViewModel
 import com.example.booknest.viewModel.BookViewModelFactory
-import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
-enum class AppScreen(val label: String, val icon: ImageVector) {
-    Home("Home", Icons.Filled.Home),
-    Saved("Saved", Icons.AutoMirrored.Filled.List),
-    Drafts("Drafts", Icons.Filled.Edit),
-    Profile("Profile", Icons.Filled.Person),
-    Search("Search", Icons.Filled.Search),
-    WritingOptions("New Draft", Icons.Filled.Add),
-    BookDetail("Details", Icons.Filled.Info),
-    Settings("Settings", Icons.Filled.Settings),
-    AddNote("Add Note", Icons.Filled.Edit),
-    AddReminder("Set Reminder", Icons.Filled.Edit),
-    Login("Login", Icons.Filled.Lock)
+object Routes {
+    const val LOGIN = "login"
+    const val MAIN = "main"
 }
 
 class MainActivity : ComponentActivity() {
@@ -66,14 +69,33 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            BookNestApp(bookViewModel)
+            val navController = rememberNavController()
+            val startDestination = if (Firebase.auth.currentUser != null) Routes.MAIN else Routes.LOGIN
+
+            NavHost(navController = navController, startDestination = startDestination) {
+                composable(Routes.LOGIN) {
+                    LoginScreen(onLoginSuccess = {
+                        bookViewModel.onUserLoggedIn()
+                        navController.navigate(Routes.MAIN) {
+                            popUpTo(Routes.LOGIN) { inclusive = true }
+                        }
+                    })
+                }
+                composable(Routes.MAIN) {
+                    BookNestApp(bookViewModel, onLogout = {
+                        navController.navigate(Routes.LOGIN) {
+                            popUpTo(Routes.MAIN) { inclusive = true }
+                        }
+                    })
+                }
+            }
         }
     }
 }
 
 @Composable
-fun BookNestApp(viewModel: BookViewModel) {
-    var currentScreen by remember { mutableStateOf(AppScreen.Login) }
+fun BookNestApp(viewModel: BookViewModel, onLogout: () -> Unit) {
+    var currentScreen by remember { mutableStateOf(AppScreen.Home) }
     var detailBookId by remember { mutableStateOf<String?>(null) }
     var darkTheme by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -93,67 +115,125 @@ fun BookNestApp(viewModel: BookViewModel) {
     }
 
     BookNestTheme(darkTheme = darkTheme) {
-        if (Firebase.auth.currentUser == null) {
-            LoginScreen(onLoginSuccess = { currentScreen = AppScreen.Home })
-        } else {
-            Scaffold(
-                topBar = { BookNestTopBar(currentScreen = currentScreen, onNavigate = navigate) },
-                bottomBar = { BookNestBottomBar(currentScreen = currentScreen, navItems = navItems, onNavigate = navigate) },
-                floatingActionButton = {
-                    if (currentScreen == AppScreen.Drafts) {
-                        FloatingActionButton(
-                            onClick = {
-                                val intent = Intent(context, WriteBookActivity::class.java)
-                                context.startActivity(intent)
-                            },
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Start Writing")
-                        }
-                    }
-                },
-                floatingActionButtonPosition = FabPosition.Center
-            ) { paddingValues ->
-                Box(modifier = Modifier.padding(paddingValues)) {
-                    when (currentScreen) {
-                        AppScreen.Home -> HomeScreen(onNavigate = navigate, books = allBooks)
-                        AppScreen.Saved -> SavedScreen(onNavigate = navigate, books = favoriteBooks)
-                        AppScreen.Drafts -> DraftsScreen(onNavigate = navigate, books = draftBooks, onEdit = {
-                            val intent = Intent(context, WriteBookActivity::class.java)
-                            intent.putExtra("BOOK_ID", it)
-                            context.startActivity(intent)
-                        }, onDelete = { viewModel.deleteBook(it) })
-                        AppScreen.Profile -> ProfileScreen(
-                            onNavigate = navigate,
-                            userId = Firebase.auth.currentUser?.uid ?: "",
-                            darkTheme = darkTheme,
-                            onThemeChange = { darkTheme = it },
-                            onLogout = { currentScreen = AppScreen.Login }
-                        )
-                        AppScreen.Search -> SearchScreen(onNavigate = navigate)
-                        AppScreen.BookDetail -> BookDetailScreen(
-                            onNavigate = navigate,
-                            bookId = detailBookId,
-                            getBookById = { viewModel.getBookById(it) },
-                            onToggleFavorite = { bookId, isFavorite -> viewModel.toggleFavorite(bookId, isFavorite) },
-                            onDownload = {
-                                Toast.makeText(context, "Book downloaded for offline use", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        AppScreen.WritingOptions -> {
+        Scaffold(
+            topBar = { BookNestTopBar(currentScreen = currentScreen, onNavigate = navigate) },
+            bottomBar = { BookNestBottomBar(currentScreen = currentScreen, navItems = navItems, onNavigate = navigate) },
+            floatingActionButton = {
+                if (currentScreen == AppScreen.Drafts) {
+                    FloatingActionButton(
+                        onClick = {
                             val intent = Intent(context, WriteBookActivity::class.java)
                             context.startActivity(intent)
-                        }
-                        AppScreen.Settings -> SettingsScreen(onNavigate = navigate)
-                        AppScreen.AddNote -> AddNoteScreen(onNavigate = navigate, bookId = detailBookId)
-                        AppScreen.AddReminder -> AddReminderScreen(onNavigate = navigate, bookId = detailBookId)
-                        AppScreen.Login -> LoginScreen(onLoginSuccess = { currentScreen = AppScreen.Home })
+                        },
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = "Start Writing")
                     }
+                }
+            },
+            floatingActionButtonPosition = FabPosition.Center
+        ) { paddingValues ->
+            Box(modifier = Modifier.padding(paddingValues)) {
+                when (currentScreen) {
+                    AppScreen.Home -> HomeScreen(onNavigate = navigate, books = allBooks)
+                    AppScreen.Saved -> SavedScreen(onNavigate = navigate, books = favoriteBooks)
+                    AppScreen.Drafts -> DraftsScreen(onNavigate = navigate, books = draftBooks, onEdit = { bookId: String ->
+                        val intent = Intent(context, WriteBookActivity::class.java)
+                        intent.putExtra("BOOK_ID", bookId)
+                        context.startActivity(intent)
+                    }, onDelete = { bookId: String -> viewModel.deleteBook(bookId) })
+                    AppScreen.Profile -> ProfileScreen(
+                        onNavigate = navigate,
+                        userId = Firebase.auth.currentUser?.uid ?: "",
+                        darkTheme = darkTheme,
+                        onThemeChange = { darkTheme = it },
+                        onLogout = onLogout
+                    )
+                    AppScreen.Search -> SearchScreen(onNavigate = navigate)
+                    AppScreen.BookDetail -> BookDetailScreen(
+                        onNavigate = navigate,
+                        bookId = detailBookId,
+                        viewModel = viewModel,
+                        onDownload = {
+                            Toast.makeText(context, "Book downloaded for offline use", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    AppScreen.Settings -> SettingsScreen(onNavigate = navigate)
+                    else -> HomeScreen(onNavigate = navigate, books = allBooks)
                 }
             }
         }
     }
+}
+
+@Composable
+fun LoginScreen(onLoginSuccess: () -> Unit) {
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") } // Corrected typo: mutableStateOf
+    val context = LocalContext.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("Welcome to BookNest", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") })
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+        )
+        Spacer(Modifier.height(16.dp))
+        Row {
+            Button(onClick = {
+                if (email.isNotBlank() && password.isNotBlank()) {
+                    Firebase.auth.signInWithEmailAndPassword(email, password)
+                        .addOnCompleteListener { task ->
+                            if (task.isSuccessful) {
+                                onLoginSuccess()
+                            } else {
+                                Toast.makeText(context, "Login failed: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                } else {
+                    Toast.makeText(context, "Please enter email and password.", Toast.LENGTH_SHORT).show()
+                }
+            }) { Text("Login") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = {
+                if (email.isNotBlank() && password.isNotBlank()) {
+                    Firebase.auth.createUserWithEmailAndPassword(email, password)
+                        .addOnCompleteListener { task ->
+                            if (task.isSuccessful) {
+                                onLoginSuccess()
+                            } else {
+                                Toast.makeText(context, "Registration failed: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                } else {
+                    Toast.makeText(context, "Please enter email and password.", Toast.LENGTH_SHORT).show()
+                }
+            }) { Text("Register") }
+        }
+    }
+}
+
+enum class AppScreen(val label: String, val icon: ImageVector) {
+    Home("Home", Icons.Filled.Home),
+    Saved("Saved", Icons.AutoMirrored.Filled.List),
+    Drafts("Drafts", Icons.Filled.Edit),
+    Profile("Profile", Icons.Filled.Person),
+    Search("Search", Icons.Filled.Search),
+    BookDetail("Details", Icons.Filled.Info),
+    Settings("Settings", Icons.Filled.Settings),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -167,9 +247,8 @@ fun BookNestTopBar(currentScreen: AppScreen, onNavigate: (AppScreen, String?) ->
             if (!isRootScreen) {
                 val backDestination = when (currentScreen) {
                     AppScreen.Settings -> AppScreen.Profile
-                    AppScreen.Search, AppScreen.WritingOptions -> AppScreen.Home
+                    AppScreen.Search -> AppScreen.Home
                     AppScreen.BookDetail -> AppScreen.Home
-                    AppScreen.AddNote, AppScreen.AddReminder -> AppScreen.BookDetail
                     else -> AppScreen.Home
                 }
                 IconButton(onClick = { onNavigate(backDestination, null) }) {
@@ -390,7 +469,8 @@ fun DraftsScreen(onNavigate: (AppScreen, String?) -> Unit, books: List<Book>, on
 fun ProfileScreen(onNavigate: (AppScreen, String?) -> Unit, userId: String, darkTheme: Boolean, onThemeChange: (Boolean) -> Unit, onLogout: () -> Unit) {
     Column(modifier = Modifier
         .fillMaxSize()
-        .padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        .padding(16.dp)
+        .verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(16.dp))
         Box(
             modifier = Modifier
@@ -423,6 +503,7 @@ fun ProfileScreen(onNavigate: (AppScreen, String?) -> Unit, userId: String, dark
         Card(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(vertical = 8.dp)
                 .clickable { onNavigate(AppScreen.Settings, null) },
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -448,14 +529,19 @@ fun ProfileScreen(onNavigate: (AppScreen, String?) -> Unit, userId: String, dark
 fun BookDetailScreen(
     onNavigate: (AppScreen, String?) -> Unit,
     bookId: String?,
-    getBookById: (String) -> StateFlow<Book?>,
-    onToggleFavorite: (String, Boolean) -> Unit,
+    viewModel: BookViewModel,
     onDownload: (Book) -> Unit
 ) {
-    val bookState by if (bookId != null) getBookById(bookId).collectAsState() else remember { mutableStateOf(null) }
-    val book = bookState
+    LaunchedEffect(bookId) {
+        if (bookId != null) {
+            viewModel.loadBook(bookId)
+        }
+    }
 
-    if (book == null) {
+    val book by viewModel.currentBook.collectAsState()
+    val currentBook = book
+
+    if (currentBook == null) {
         Column(
             modifier = Modifier.fillMaxSize().padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -474,17 +560,17 @@ fun BookDetailScreen(
 
     Column(modifier = Modifier
         .fillMaxSize()
-        .padding(16.dp)
+        .padding(horizontal = 16.dp)
         .verticalScroll(rememberScrollState())) {
-        Text("Book Detail", style = MaterialTheme.typography.headlineMedium)
+        Text("Book Detail", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
         Spacer(Modifier.height(8.dp))
-        Text("Title: ${book.title}", style = MaterialTheme.typography.titleLarge)
-        Text("Author: ${book.author}", style = MaterialTheme.typography.titleMedium)
-        Text("Genre: ${book.genre}", style = MaterialTheme.typography.bodyMedium)
+        Text("Title: ${currentBook.title}", style = MaterialTheme.typography.titleLarge)
+        Text("Author: ${currentBook.author}", style = MaterialTheme.typography.titleMedium)
+        Text("Genre: ${currentBook.genre}", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(16.dp))
         Image(
             imageVector = Icons.Filled.Info,
-            contentDescription = "Cover of ${book.title}",
+            contentDescription = "Cover of ${currentBook.title}",
             modifier = Modifier
                 .height(200.dp)
                 .fillMaxWidth()
@@ -492,22 +578,23 @@ fun BookDetailScreen(
             contentScale = ContentScale.Fit
         )
         Spacer(Modifier.height(16.dp))
-        Text(book.content)
+        Text(currentBook.content)
         Spacer(Modifier.height(24.dp))
 
-        Button(onClick = { onToggleFavorite(book.id, !book.isFavorite) }) {
-            Icon(if (book.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = "Favorite")
+        Button(onClick = { viewModel.toggleFavorite(currentBook.id, !currentBook.isFavorite) }) {
+            Icon(if (currentBook.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = "Favorite")
             Spacer(Modifier.width(8.dp))
-            Text(if (book.isFavorite) "Favorited" else "Favorite")
+            Text(if (currentBook.isFavorite) "Favorited" else "Favorite")
         }
 
         Spacer(Modifier.height(8.dp))
 
-        Button(onClick = { onDownload(book) }) {
+        Button(onClick = { onDownload(currentBook) }) {
             Icon(Icons.Filled.Download, contentDescription = "Download")
             Spacer(Modifier.width(8.dp))
             Text("Download")
         }
+        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -565,98 +652,4 @@ fun SettingsScreen(onNavigate: (AppScreen, String?) -> Unit) {
             Text("Sign Out", color = MaterialTheme.colorScheme.onErrorContainer)
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AddNoteScreen(onNavigate: (AppScreen, String?) -> Unit, bookId: String?) {
-    Column(modifier = Modifier
-        .fillMaxSize()
-        .padding(16.dp)) {
-        Text("Add New Note for Book ID: ${bookId ?: "Unknown"}", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(16.dp))
-        var noteContent by remember { mutableStateOf("") }
-        OutlinedTextField(
-            value = noteContent,
-            onValueChange = { noteContent = it },
-            label = { Text("Your Note Content...") },
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 150.dp)
-        )
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = { onNavigate(AppScreen.BookDetail, bookId) }) {
-            Text("Save Note")
-        }
-    }
-}
-
-@Composable
-fun AddReminderScreen(onNavigate: (AppScreen, String?) -> Unit, bookId: String?) {
-    Column(modifier = Modifier
-        .fillMaxSize()
-        .padding(16.dp)) {
-        Text("Set Reading Reminder for Book ID: ${bookId ?: "Unknown"}", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(16.dp))
-        Text("Reminder Date: (Tap to select date)", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(8.dp))
-        Text("Reminder Time: (Tap to select time)", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = { /* TODO: Implement date/time picker logic */ onNavigate(AppScreen.BookDetail, bookId) }) {
-            Text("Set Reminder")
-        }
-    }
-}
-
-@Composable
-fun LoginScreen(onLoginSuccess: () -> Unit) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    val context = LocalContext.current
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Welcome to BookNest", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(16.dp))
-        OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") })
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("Password") })
-        Spacer(Modifier.height(16.dp))
-        Row {
-            Button(onClick = {
-                Firebase.auth.signInWithEmailAndPassword(email, password)
-                    .addOnCompleteListener { task ->
-                        if (task.isSuccessful) {
-                            onLoginSuccess()
-                        } else {
-                            Toast.makeText(context, "Login failed: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-            }) { Text("Login") }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = {
-                Firebase.auth.createUserWithEmailAndPassword(email, password)
-                    .addOnCompleteListener { task ->
-                        if (task.isSuccessful) {
-                            onLoginSuccess()
-                        } else {
-                            Toast.makeText(context, "Registration failed: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-            }) { Text("Register") }
-        }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun DefaultPreview() {
-    val app = LocalContext.current.applicationContext as BookNestApp
-    val viewModel = BookViewModel(app.repository, app.auth)
-    BookNestApp(viewModel)
 }
