@@ -1,31 +1,51 @@
-
 package com.example.booknest
 
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
+import com.example.booknest.data.Chapter
 import com.example.booknest.data.FirebaseBookRepository
-import com.example.booknest.ui.theme.BookNestTheme
 import com.example.booknest.viewModel.WriteBookViewModel
 import com.example.booknest.viewModel.WriteBookViewModelFactory
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.launch
+
+// --- Color Schemes based on Mockups ---
+private val DarkGreenColorScheme = darkColorScheme(
+    primary = Color(0xFF50D387), background = Color(0xFF0E1F14), surface = Color(0xFF0E1F14),
+    onPrimary = Color.Black, onBackground = Color(0xFFE0E3E0), onSurface = Color(0xFFE0E3E0),
+    surfaceVariant = Color(0xFF1A2B20), onSurfaceVariant = Color(0xFFBFC9BF)
+)
+
+private val LightGreenColorScheme = lightColorScheme(
+    primary = Color(0xFF006D39), background = Color(0xFFF6FBF3), surface = Color(0xFFF6FBF3),
+    onPrimary = Color.White, onBackground = Color(0xFF1A1C1A), onSurface = Color(0xFF1A1C1A),
+    surfaceVariant = Color(0xFFDDE5DA), onSurfaceVariant = Color(0xFF424942)
+)
 
 class WriteBookActivity : ComponentActivity() {
     private lateinit var viewModel: WriteBookViewModel
@@ -33,141 +53,119 @@ class WriteBookActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val bookId = intent.getStringExtra("BOOK_ID")
-        val factory = WriteBookViewModelFactory(FirebaseBookRepository(), Firebase.auth)
-        viewModel = ViewModelProvider(this, factory).get(WriteBookViewModel::class.java)
+        val chapterId = intent.getStringExtra("CHAPTER_ID")
 
-        // Load the draft immediately.
+        val factory = WriteBookViewModelFactory(FirebaseBookRepository(), Firebase.auth)
+        viewModel = ViewModelProvider(this, factory)[WriteBookViewModel::class.java]
+
         viewModel.loadDraft(bookId)
+        if (chapterId != null) {
+            viewModel.selectChapter(chapterId)
+        }
 
         setContent {
-            BookNestTheme {
-                WriteScreen(
-                    viewModel = viewModel,
-                    onBack = { finish() }
-                )
+            val book by viewModel.book.collectAsState()
+            val selectedChapter by viewModel.selectedChapter.collectAsState()
+
+            var isDarkMode by remember { mutableStateOf(true) }
+            val colorScheme = if (isDarkMode) DarkGreenColorScheme else LightGreenColorScheme
+
+            MaterialTheme(colorScheme = colorScheme) {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    WriteScreen(
+                        viewModel = viewModel,
+                        bookTitle = book?.title ?: "Untitled Book",
+                        chapter = selectedChapter,
+                        onThemeToggle = { isDarkMode = !isDarkMode },
+                        onBack = { finish() }
+                    )
+                }
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WriteScreen(viewModel: WriteBookViewModel, onBack: () -> Unit) {
-    val book by viewModel.book.collectAsState()
-    val chapters by viewModel.chapters.collectAsState()
-    val selectedChapter by viewModel.selectedChapter.collectAsState()
-    val wordCountError by viewModel.wordCountError.collectAsState()
-
-    val coroutineScope = rememberCoroutineScope()
+fun WriteScreen(
+    viewModel: WriteBookViewModel,
+    bookTitle: String,
+    chapter: Chapter?,
+    onThemeToggle: () -> Unit,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
-    // Local states for the text fields
-    var bookTitle by remember { mutableStateOf("") }
-    var chapterContent by remember { mutableStateOf("") }
+    var titleState by remember(bookTitle) { mutableStateOf(bookTitle) }
+    var contentState by remember { mutableStateOf("") }
 
-    // When the book or selected chapter from the ViewModel changes, update the local states.
-    LaunchedEffect(book) {
-        book?.let {
-            if (bookTitle != it.title) {
-                bookTitle = it.title
-            }
-        }
-    }
-    LaunchedEffect(selectedChapter) {
-        selectedChapter?.let {
-            if (chapterContent != it.content) {
-                chapterContent = it.content
-            }
-        }
+    // Use LaunchedEffect to safely update the local content state when the chapter changes
+    LaunchedEffect(chapter) {
+        contentState = chapter?.content ?: ""
     }
 
-    // Show a toast when the word count error is triggered
-    LaunchedEffect(wordCountError) {
-        if (wordCountError) {
-            Toast.makeText(context, "Chapter cannot exceed 300 words.", Toast.LENGTH_LONG).show()
-            viewModel.clearWordCountError() // Reset the error after showing it
-        }
+    val wordCount = remember(contentState) {
+        contentState.split(Regex("\\s+")).filter { it.isNotBlank() }.size
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Write") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
+                title = { Text(titleState, fontWeight = FontWeight.Bold) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
+                    IconButton(onClick = onThemeToggle) { Icon(Icons.Filled.InvertColors, "Toggle Theme") }
                     IconButton(onClick = {
                         coroutineScope.launch {
-                            val savedBookId = viewModel.save(bookTitle, chapterContent)
+                            val savedBookId = viewModel.save(titleState, contentState)
                             if (savedBookId != null) {
                                 Toast.makeText(context, "Draft saved!", Toast.LENGTH_SHORT).show()
                             }
                         }
-                    }) {
-                        Icon(Icons.Default.Check, contentDescription = "Save Draft")
-                    }
-                    IconButton(onClick = {
-                        viewModel.publish()
-                        Toast.makeText(context, "Book published!", Toast.LENGTH_SHORT).show()
-                        onBack()
-                    }) {
-                        Text("Publish")
-                    }
-                }
+                    }) { Icon(Icons.Filled.Save, "Save") }
+                    IconButton(onClick = { /* TODO: More options */ }) { Icon(Icons.Filled.MoreVert, "More") }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { viewModel.addNewChapter() }) {
-                Icon(Icons.Default.Add, contentDescription = "Add Chapter")
-            }
-        }
+        containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
-        Column(modifier = Modifier.padding(paddingValues).padding(16.dp)) {
-            // Book Title TextField
-            OutlinedTextField(
-                value = bookTitle,
-                onValueChange = { bookTitle = it },
-                label = { Text("Book Title") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Chapter Dropdown
-            var chapterMenuExpanded by remember { mutableStateOf(false) }
-            Box {
-                OutlinedButton(onClick = { chapterMenuExpanded = true }) {
-                    Text(selectedChapter?.title ?: "Select Chapter")
-                    Icon(Icons.Default.MoreVert, contentDescription = "Chapter Menu")
-                }
-                DropdownMenu(
-                    expanded = chapterMenuExpanded,
-                    onDismissRequest = { chapterMenuExpanded = false }
+        Column(
+            modifier = Modifier
+                .padding(paddingValues)
+                .padding(horizontal = 16.dp)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(chapter?.title ?: "Chapter", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Box(
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(vertical = 4.dp, horizontal = 12.dp)
                 ) {
-                    chapters.forEach { chapter ->
-                        DropdownMenuItem(
-                            text = { Text(chapter.title) },
-                            onClick = {
-                                viewModel.selectChapter(chapter.id)
-                                chapterMenuExpanded = false
-                            }
-                        )
+                    Text("$wordCount words", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            BasicTextField(
+                value = contentState,
+                onValueChange = { contentState = it },
+                modifier = Modifier.fillMaxSize(),
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground, fontSize = 16.sp, lineHeight = 24.sp),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                decorationBox = { innerTextField ->
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (contentState.isEmpty()) {
+                            Text("Begin your story... ✨", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp)
+                        }
+                        innerTextField()
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Chapter Content TextField
-            OutlinedTextField(
-                value = chapterContent,
-                onValueChange = { chapterContent = it },
-                label = { Text("Start writing your chapter...") },
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                isError = wordCountError
             )
         }
     }

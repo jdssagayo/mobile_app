@@ -56,6 +56,17 @@ class FirebaseBookRepository(
         }
     }
 
+    fun getPublicChapters(bookId: String): Flow<List<Chapter>> {
+        return publicChaptersCollection(bookId)
+            .orderBy("timestamp", Query.Direction.ASCENDING)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.documents.mapNotNull { doc ->
+                    doc.toObject(Chapter::class.java)?.copy(id = doc.id)
+                }
+            }
+    }
+
     // --- User-Specific Drafts (for WriteBookViewModel) --- //
 
     fun getDraftBooks(userId: String): Flow<List<Book>> {
@@ -94,7 +105,7 @@ class FirebaseBookRepository(
         for (chapterDoc in draftChapters.documents) {
             val chapter = chapterDoc.toObject(Chapter::class.java)
             if (chapter != null) {
-                publicChaptersCollection(publicBookRef.id).document(chapterDoc.id).set(chapter).await()
+                publicChaptersCollection(publicBookRef.id).document(chapterDoc.id).set(chapter.copy(userId = userId)).await()
             }
         }
 
@@ -178,13 +189,13 @@ class FirebaseBookRepository(
     }
 
     suspend fun saveChapter(userId: String, bookId: String, chapter: Chapter): Chapter {
-        val chapterWithTimestamp = chapter.copy(timestamp = System.currentTimeMillis())
+        val chapterWithUser = chapter.copy(userId = userId, timestamp = System.currentTimeMillis())
         return if (chapter.id.isBlank()) {
-            val newDocRef = draftChaptersCollection(userId, bookId).add(chapterWithTimestamp).await()
-            chapterWithTimestamp.copy(id = newDocRef.id)
+            val newDocRef = draftChaptersCollection(userId, bookId).add(chapterWithUser).await()
+            chapterWithUser.copy(id = newDocRef.id)
         } else {
-            draftChaptersCollection(userId, bookId).document(chapter.id).set(chapterWithTimestamp).await()
-            chapterWithTimestamp
+            draftChaptersCollection(userId, bookId).document(chapter.id).set(chapterWithUser).await()
+            chapterWithUser
         }
     }
 

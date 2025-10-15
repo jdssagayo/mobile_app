@@ -3,6 +3,7 @@ package com.example.booknest.viewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.booknest.data.Book
+import com.example.booknest.data.Chapter
 import com.example.booknest.data.FirebaseBookRepository
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,17 +25,18 @@ class BookViewModel(private val repository: FirebaseBookRepository, private val 
     private val _currentBook = MutableStateFlow<Book?>(null)
     val currentBook: StateFlow<Book?> = _currentBook.asStateFlow()
 
+    private val _currentBookChapters = MutableStateFlow<List<Chapter>>(emptyList())
+    val currentBookChapters: StateFlow<List<Chapter>> = _currentBookChapters.asStateFlow()
+
     private val currentUserId: String?
         get() = auth.currentUser?.uid
 
     init {
-        // Fetch initial data only if a user is already logged in (e.g., app restart).
         if (currentUserId != null) {
             initializeDataForCurrentUser()
         }
     }
 
-    // This is the new public function to call after login.
     fun onUserLoggedIn() {
         initializeDataForCurrentUser()
     }
@@ -76,16 +78,17 @@ class BookViewModel(private val repository: FirebaseBookRepository, private val 
     fun loadBook(bookId: String) {
         viewModelScope.launch {
             _currentBook.value = repository.getBookById(bookId)
+            // Also fetch the chapters for the now-current book
+            repository.getPublicChapters(bookId).collect {
+                _currentBookChapters.value = it
+            }
         }
     }
 
     suspend fun saveBook(book: Book): String? {
-        val userId = currentUserId ?: return null // Don't save if user is not logged in
+        val userId = currentUserId ?: return null
         val result = repository.saveBook(book.copy(userId = userId))
-        
-        // After saving a book, ALWAYS refresh the drafts list.
         fetchDraftBooks()
-        
         return result
     }
 
